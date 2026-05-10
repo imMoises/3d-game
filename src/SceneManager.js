@@ -31,8 +31,8 @@ export class SceneManager {
         this._CrearCamara();
         this._CrearControles();
 
-        this._world = new World();
-        this._scene = this._world.scene;
+        this._world = new World(); //Creo el mundo en base a la clase World que cree en src/World.js
+        this._scene = this._world.scene; //Lo agrego a la escena
 
         this._RAF();
             
