@@ -16,6 +16,12 @@ export class Player{
         this._currentAction = null
         this._moveSpeed = 8
 
+        this.vida = 100;
+        this.estaCubriendose = false;
+        this.estaAturdido = false;
+        this.oponente = null; // Referencia al otro jugador
+        this._posicionInicial = params.position || new THREE.Vector3(0, 0, 0);
+
         this._input = new KeyControllers()
         this._LoadModel()
         
@@ -31,6 +37,9 @@ export class Player{
                     c.castShadow = true
                     c.layers.set(1)
                 })
+
+// Ubicar al jugador en su posición inicial una vez cargado
+                fbx.position.copy(this._posicionInicial);
 
                 const luzAmbientePersonaje = new THREE.AmbientLight(0xffffff, 1)
                 luzAmbientePersonaje.layers.set(1)
@@ -112,12 +121,51 @@ export class Player{
     }
 
     _UpdateLocomotionAction(){
+        if (this.estaAturdido) return; // si se aturdió, no cambiar la animación de locomoción  
+
         const keys = this._input._keys
         const moving = keys.adelante || keys.atras || keys.izquierda || keys.derecha
-        if (moving) {
+        if (this.estaCubriendose) {
+            // this._SetAction('bloqueo'); // Activa esto cuando tengas la animación
+            this._SetAction('Idle'); // Temporal
+        } else if (moving) {
             this._SetAction('caminar', true)
         } else {
             this._SetAction('Idle')
+        }
+    }
+
+    RecibirGolpe(daño) {
+        if (this.estaCubriendose) {
+            this.vida -= (daño * 0.1); // Solo 10% del daño si se cubre
+            console.log(`[Bloqueo] Vida restante: ${this.vida}`);
+            return;
+        }
+
+        // Si no se cubre: recibe daño total, se cancela lo que esté haciendo y queda vulnerable
+        this.vida -= daño;
+        this.estaAturdido = true;
+        console.log(`[Impacto Directo] Vida restante: ${this.vida}`);
+
+        // Cancela ataque en progreso forzando un estado de "hit" o Idle
+        this._SetAction('Idle', true, true); // Idealmente cambiar a 'hit_reaction'
+
+        // Se recupera del stun después de 600ms (lo que duraría la animación de golpe)
+        setTimeout(() => {
+            this.estaAturdido = false;
+            this._UpdateLocomotionAction();
+        }, 600);
+    }
+
+    _IntentarGolpe(daño) {
+        if (!this.oponente || !this.oponente._model || !this._model) return;
+
+        // Calculamos distancia simple entre el centro de ambos jugadores
+        const distancia = this._model.position.distanceTo(this.oponente._model.position);
+        const rangoGolpe = 2.5; // Ajusta este valor según la escala de tus modelos
+
+        if (distancia <= rangoGolpe) {
+            this.oponente.RecibirGolpe(daño);
         }
     }
 
@@ -126,31 +174,30 @@ export class Player{
 
         const keys = this._input._keys
 
-        if (keys.izquierda) {
-            this._model.translateX(-this._moveSpeed * tiempo)
+
+        if (!this.estaAturdido) {
+            this.estaCubriendose = keys.cubrirse;
         }
 
-        if (keys.derecha) {
-            this._model.translateX(this._moveSpeed * tiempo)
-        }
-
-        if (keys.adelante) {
-            this._model.translateZ(this._moveSpeed * tiempo)
-        }
-
-        if (keys.atras) {
-            this._model.translateZ(-this._moveSpeed * tiempo)
-        }
+        if (!this.estaAturdido && !this.estaCubriendose) {
+            if (keys.izquierda) this._model.translateX(-this._moveSpeed * tiempo);
+            if (keys.derecha) this._model.translateX(this._moveSpeed * tiempo);
+            if (keys.adelante) this._model.translateZ(this._moveSpeed * tiempo);
+            if (keys.atras) this._model.translateZ(-this._moveSpeed * tiempo);
 
         const attackPressed = this._input.ConsumeAttackPress()
         const kickPressed = this._input.ConsumeKickPress()
 
         if (attackPressed) {
             this._SetAction('golpear', true, true)
+            this._IntentarGolpe(10); // Llama al sistema de hitbox con un daño de 10
         } else if (kickPressed) {
             this._SetAction('patear', true, true)
+            this._IntentarGolpe(15); // La patada quita más vida
         } else if (this._currentAction !== 'golpear' && this._currentAction !== 'patear') {
             this._UpdateLocomotionAction()
+        }else if (this.estaCubriendose && this._currentAction !== 'golpear' && this._currentAction !== 'patear') {
+            this._UpdateLocomotionAction(); // Actualiza a animación de bloqueo
         }
 
         this._mixer.update(tiempo)
@@ -158,4 +205,5 @@ export class Player{
 
     }
 
+    }
 }

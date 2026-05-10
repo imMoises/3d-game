@@ -11,6 +11,7 @@ export class KeyControllers{
             derecha: false,
             ataque: false,
             patada: false,
+            cubrirse: false,
             ataquePressed: false,
             patadaPressed: false,
         }
@@ -40,6 +41,9 @@ export class KeyControllers{
             this._keys.patada = true;
             this._keys.patadaPressed = true;
             break;
+            case 76: // L 
+                this._keys.cubrirse = true;
+                break;
         }
     }
     _onKeyUp(event) {
@@ -62,6 +66,9 @@ export class KeyControllers{
         case 75: // k
             this._keys.patada = false;
             break;
+            case 76: // L 
+                this._keys.cubrirse = false;
+                break;
         }
   }
 
