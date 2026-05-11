@@ -26,13 +26,15 @@ export class CombatSystem {
   static STUN_MAX_DURATION = 1.2;
 
   // ─── Rangos de golpe ─────────────────────────────────────────────────────
-  // Rango base: solo se usa fuera de la ventana de frames activos
-  static PUNCH_RANGE          = 10;
-  static KICK_RANGE           = 20;
-  // Rango extendido: activo durante la ventana de animación (20%–75% del clip)
-  // Permite que el golpe conecte sin estar encima del rival
-  static PUNCH_RANGE_EXTENDED = 3.8;
-  static KICK_RANGE_EXTENDED  = 4.5;
+  // Rango base: solo se usa fuera de la ventana de frames activos.
+  // Mantenerlo muy pequeño para que startup/recovery casi nunca golpeen.
+  static PUNCH_RANGE          = 1.5;
+  static KICK_RANGE           = 2.0;
+  // Rango extendido: activo durante la ventana de animación (20%–75% del clip).
+  // Debe ser mayor que la separación mínima entre cuerpos (PLAYER_RADIUS*2 = 5),
+  // si no los golpes nunca llegan a conectar.
+  static PUNCH_RANGE_EXTENDED = 8.0;
+  static KICK_RANGE_EXTENDED  = 11.0;
 
   // Knockback
   static KNOCKBACK_PUNCH = 0.6;

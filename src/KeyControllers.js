@@ -34,14 +34,15 @@ export class KeyControllers{
             this._keys.derecha = true;
             break;
         case 74: // J
+            // edge: solo marcar pressed en el flanco de bajada
+            if (!this._keys.ataque) this._keys.ataquePressed = true;
             this._keys.ataque = true;
-            this._keys.ataquePressed = true;
             break;
         case 75: // k
+            if (!this._keys.patada) this._keys.patadaPressed = true;
             this._keys.patada = true;
-            this._keys.patadaPressed = true;
             break;
-        case 76: // L 
+        case 76: // L
             this._keys.cubrirse = true;
             break;
         }
@@ -66,10 +67,25 @@ export class KeyControllers{
         case 75: // k
             this._keys.patada = false;
             break;
-        case 76: // L 
+        case 76: // L
             this._keys.cubrirse = false;
             break;
         }
+    }
+
+    // ── Consumidores de "pulsación" (edge-triggered) ──────────────────────
+    // Player.js usa estos para disparar un único golpe por pulsación,
+    // exactamente igual que GamepadController.
+    ConsumeAttackPress(){
+        const p = this._keys.ataquePressed;
+        this._keys.ataquePressed = false;
+        return p;
+    }
+
+    ConsumeKickPress(){
+        const p = this._keys.patadaPressed;
+        this._keys.patadaPressed = false;
+        return p;
     }
 
 }

@@ -3,6 +3,16 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.118/build/three.module.js';
 import { FBXLoader } from 'https://cdn.jsdelivr.net/npm/three@0.118.1/examples/jsm/loaders/FBXLoader.js';
 import { CombatSystem } from './CombatSystem.js';
+import { Audio, initGameAudio } from './AudioManager.js';
+
+// Inicializar el banco de sonidos una sola vez (idempotente porque los Player
+// se crean en el mismo arranque). Si se importa antes de tiempo, igual funciona.
+let _audioReady = false;
+function _ensureAudio() {
+  if (_audioReady) return;
+  initGameAudio('assets/audios/');
+  _audioReady = true;
+}
 
 // ─── Máquina de estados ───────────────────────────────────────────────────────
 export const PlayerState = {
@@ -40,6 +50,8 @@ export class Player {
   // ─── Init ──────────────────────────────────────────────────────────────────
 
   _Init(params) {
+    _ensureAudio();
+
     this._params        = params;
     this._animaciones   = {};
     this._currentAction = null;
@@ -51,6 +63,11 @@ export class Player {
     this._hitStunTimer  = 0;
     this._stunTimer     = 0;
     this._attackTimer   = 0;
+
+    // Resultado del ataque actual: 'pending' | 'hit' | 'miss'
+    // Determina qué sonido se reproduce (uno solo por ataque).
+    this._attackOutcome = 'none';
+    this._attackKind    = null; // 'punch' | 'kick'
 
     // Duración de estados temporales (segundos)
     this._HIT_STUN_DURATION = 0.35;
@@ -258,15 +275,29 @@ export class Player {
 
       case PlayerState.ATTACKING:
         this._attackTimer -= delta;
-        // Ventana de frames activos: intentar golpe una sola vez
+        // Ventana de frames activos: intentar golpe / decidir fallo
         this._TryLandHitInWindow('punch');
-        if (this._attackTimer <= 0) this._transition(PlayerState.IDLE);
+        if (this._attackTimer <= 0) {
+          // Safety net: si el timer expira antes de que el cálculo de
+          // progreso detectara el fallo, reproducir el sonido de miss aquí.
+          if (this._attackOutcome === 'pending') {
+            this._attackOutcome = 'miss';
+            Audio.play('punch_miss');
+          }
+          this._transition(PlayerState.IDLE);
+        }
         break;
 
       case PlayerState.KICKING:
         this._attackTimer -= delta;
         this._TryLandHitInWindow('kick');
-        if (this._attackTimer <= 0) this._transition(PlayerState.IDLE);
+        if (this._attackTimer <= 0) {
+          if (this._attackOutcome === 'pending') {
+            this._attackOutcome = 'miss';
+            Audio.play('kick_miss');
+          }
+          this._transition(PlayerState.IDLE);
+        }
         break;
     }
   }
@@ -275,29 +306,44 @@ export class Player {
 
   /**
    * Se llama cada frame mientras el personaje está en ATTACKING o KICKING.
-   * Usa _hitLanded para garantizar que el golpe conecta una sola vez por ataque.
+   *
+   * Reglas de audio (un único sonido por ataque):
+   *   - Si conecta dentro de la ventana activa → 'punch_hit' / 'kick_hit'
+   *   - Si se pasa la ventana sin conectar      → 'punch_miss' / 'kick_miss'
+   *
+   * Se usa _attackOutcome (pending|hit|miss) en lugar del antiguo _hitLanded.
    */
   _TryLandHitInWindow(type) {
-    if (this._hitLanded) return; // ya conectó en este ataque
-    if (!this.oponente?._model || !this._model) return;
+    if (this._attackOutcome === 'hit' || this._attackOutcome === 'miss') return;
+    if (!this._model) return;
 
     const totalDur  = type === 'punch' ? this._ATTACK_DURATION : this._KICK_DURATION;
     const elapsed   = totalDur - this._attackTimer;
     const progress  = elapsed / totalDur;
 
-    // Solo durante la ventana activa del clip
-    const inWindow  = progress >= this._ACTIVE_START && progress <= this._ACTIVE_END;
-    if (!inWindow) return;
+    // ¿Se nos pasó la ventana activa sin conectar? → fallo
+    if (progress > this._ACTIVE_END) {
+      this._attackOutcome = 'miss';
+      Audio.play(type === 'punch' ? 'punch_miss' : 'kick_miss');
+      return;
+    }
+
+    // Aún no entramos a la ventana → esperar
+    if (progress < this._ACTIVE_START) return;
+
+    if (!this.oponente?._model) return;
 
     const distX = Math.abs(
       this._model.position.x - this.oponente._model.position.x
     );
 
-    // Rango extendido durante frames activos
+    // Dentro de la ventana activa → intentar golpe con rango extendido
     const result = this.combat.landHit(type, distX, this.oponente.combat, true);
 
     if (result?.hit) {
-      this._hitLanded = true; // evitar golpear más de una vez por acción
+      this._attackOutcome = 'hit';
+      Audio.play(type === 'punch' ? 'punch_hit' : 'kick_hit');
+
       const dir = Math.sign(
         this.oponente._model.position.x - this._model.position.x
       );
@@ -333,13 +379,17 @@ export class Player {
     const kickPressed   = this._input.ConsumeKickPress?.();
 
     if (attackPressed && this._transition(PlayerState.ATTACKING)) {
-      this._attackTimer = this._ATTACK_DURATION;
-      this._hitLanded   = false; // reset de la ventana
+      this._attackTimer    = this._ATTACK_DURATION;
+      this._attackOutcome  = 'pending'; // pendiente: aún no sabemos si conectará
+      this._attackKind     = 'punch';
+      this._hitLanded      = false;     // legacy
     }
 
     if (kickPressed && this._transition(PlayerState.KICKING)) {
-      this._attackTimer = this._KICK_DURATION;
-      this._hitLanded   = false;
+      this._attackTimer    = this._KICK_DURATION;
+      this._attackOutcome  = 'pending';
+      this._attackKind     = 'kick';
+      this._hitLanded      = false;
     }
   }
 
