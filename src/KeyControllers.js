@@ -41,9 +41,9 @@ export class KeyControllers{
             this._keys.patada = true;
             this._keys.patadaPressed = true;
             break;
-            case 76: // L 
-                this._keys.cubrirse = true;
-                break;
+        case 76: // L 
+            this._keys.cubrirse = true;
+            break;
         }
     }
     _onKeyUp(event) {
@@ -66,21 +66,10 @@ export class KeyControllers{
         case 75: // k
             this._keys.patada = false;
             break;
-            case 76: // L 
-                this._keys.cubrirse = false;
-                break;
+        case 76: // L 
+            this._keys.cubrirse = false;
+            break;
         }
-  }
-
-    ConsumeAttackPress(){
-        const pressed = this._keys.ataquePressed
-        this._keys.ataquePressed = false
-        return pressed
     }
 
-    ConsumeKickPress(){
-        const pressed = this._keys.patadaPressed
-        this._keys.patadaPressed = false
-        return pressed
-    }
 }

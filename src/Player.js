@@ -2,7 +2,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.118/build/three.module.js';
 import {FBXLoader} from 'https://cdn.jsdelivr.net/npm/three@0.118.1/examples/jsm/loaders/FBXLoader.js';
 import { KeyControllers } from './KeyControllers.js';
-
+import { CombatSystem } from './CombatSystem.js';
 
 export class Player{
 
@@ -21,16 +21,49 @@ export class Player{
         this.estaAturdido = false;
         this.oponente = null; // Referencia al otro jugador
         this._posicionInicial = params.position || new THREE.Vector3(0, 0, 0);
+        
 
-        this._input = new KeyControllers()
+        // Input controller puede ser pasado en params.input (KeyControllers o GamepadController)
+        this._input = params.input || new KeyControllers()
         this._LoadModel()
+
+        this.combat = new CombatSystem('p1');  // Cambiar a 'p2' para el segundo jugador
+
+        // Escuchar eventos del combate
+        this.combat.on('hit', ({ attackType, blocked, damage, knockback }) => {
+            // Aplicar knockback en X (dirección opuesta al oponente)
+            if (knockback > 0 && this._model && this.oponente && this.oponente._model) {
+                const dir = this._model.position.x < this.oponente._model.position.x ? -1 : 1;
+                this._model.position.x += dir * knockback;
+            }
+
+            // Activar animación de daño si existe en tus FBX
+            // this._PlayAnimation('golpeRecibido');  // descomenta si tienes esa animación
+        });
+
+        this.combat.on('stunStart', () => {
+        this.estaAturdido = true;
+        });
+
+        this.combat.on('stunEnd', () => {
+        this.estaAturdido = false;
+        });
+
+        this.combat.on('death', () => {
+        // Activar animación de muerte si existe
+        // this._PlayAnimation('muerte');
+        console.log(`${this.combat.id} ha muerto`);
+        });
+
+
+
         
     }
 
     _LoadModel(){
         const loader = new FBXLoader()
-        loader.setPath('./assets/james/')
-        loader.load('james_malla.fbx',
+        loader.setPath(this._params.modelPath)
+        loader.load('malla.fbx',
             (fbx) => { 
                 fbx.scale.setScalar(0.1)
                 fbx.traverse(c => {
@@ -62,6 +95,11 @@ export class Player{
                     }
                 })
 
+                // Si se pasó un callback externo para cuando el modelo esté listo
+                if (this._params.onModelLoaded) {
+                    this._params.onModelLoaded(this);
+                }
+
                 const _OnLoad = (nombreAnimacion, animacion) => {
 
                     const clip = animacion.animations[0]
@@ -81,6 +119,16 @@ export class Player{
 
              }
         )
+    }
+
+    // Orienta el model para mirar hacia otro Player (en X), evita tilt en Y
+    faceTarget(targetPlayer){
+        if (!this._model || !targetPlayer || !targetPlayer._model) return;
+        const myPos = this._model.position.clone();
+        const targetPos = targetPlayer._model.position.clone();
+        // Mantener la misma altura para evitar tilt
+        const lookAt = new THREE.Vector3(targetPos.x, myPos.y, targetPos.z);
+        this._model.lookAt(lookAt);
     }
 
     _SetAction(nombreAnimacion, once = false, forceRestart = false){
@@ -115,24 +163,28 @@ export class Player{
             siguiente.clampWhenFinished = false
         }
 
-        siguiente.fadeIn(0.15)
         siguiente.play()
         this._currentAction = nombreAnimacion
     }
 
     _UpdateLocomotionAction(){
         if (this.estaAturdido) return; // si se aturdió, no cambiar la animación de locomoción  
-
         const keys = this._input._keys
-        const moving = keys.adelante || keys.atras || keys.izquierda || keys.derecha
+        // Movimiento restringido al eje X: izquierda/derecha
+        const moving = keys.izquierda || keys.derecha
+        const patada = keys.patada
+        const ataque = keys.ataque
         if (this.estaCubriendose) {
-            // this._SetAction('bloqueo'); // Activa esto cuando tengas la animación
-            this._SetAction('Idle'); // Temporal
+            this._SetAction('Idle'); 
         } else if (moving) {
             this._SetAction('caminar', true)
+        } else if (ataque) {
+            this._SetAction('golpear', true)
+        } else if (patada) {
+            this._SetAction('patear', true) 
         } else {
             this._SetAction('Idle')
-        }
+        } 
     }
 
     RecibirGolpe(daño) {
@@ -174,27 +226,53 @@ export class Player{
 
         const keys = this._input._keys
 
+        // Actualizar sistema de combate
+        const cubriendo = keys.cubrirse;
+        this.combat.update(tiempo, cubriendo);
+
+        // Bloquear acciones si está muerto
+        if (this.combat.isDead) return;
+
+        if (this.estaAturdido || this.combat.isStunned) {
+            // No procesar movimiento ni ataques
+            return;
+            }
 
         if (!this.estaAturdido) {
             this.estaCubriendose = keys.cubrirse;
         }
 
         if (!this.estaAturdido && !this.estaCubriendose) {
-            if (keys.izquierda) this._model.translateX(-this._moveSpeed * tiempo);
-            if (keys.derecha) this._model.translateX(this._moveSpeed * tiempo);
-            if (keys.adelante) this._model.translateZ(this._moveSpeed * tiempo);
-            if (keys.atras) this._model.translateZ(-this._moveSpeed * tiempo);
+            // Movimiento restringido solo al eje X (strafe)
+            if (keys.izquierda) this._model.translateZ(-this._moveSpeed * tiempo);
+            if (keys.derecha) this._model.translateZ(this._moveSpeed * tiempo);
 
-        const attackPressed = this._input.ConsumeAttackPress()
-        const kickPressed = this._input.ConsumeKickPress()
 
-        if (attackPressed) {
-            this._SetAction('golpear', true, true)
-            this._IntentarGolpe(10); // Llama al sistema de hitbox con un daño de 10
-        } else if (kickPressed) {
-            this._SetAction('patear', true, true)
-            this._IntentarGolpe(15); // La patada quita más vida
-        } else if (this._currentAction !== 'golpear' && this._currentAction !== 'patear') {
+       if (keys.ataque) {
+        this._UpdateLocomotionAction('golpear');
+
+        // Solo intentar golpe si hay oponente
+            if (this.oponente) {
+            const distX = Math.abs(
+            this._model.position.x - this.oponente._model.position.x
+            );
+            this.combat.landHit('punch', distX, this.oponente.combat);
+        }
+        }
+       
+        else if (keys.patada) {
+                this._UpdateLocomotionAction('patear');
+
+                if (this.oponente) {
+                    const distX = Math.abs(
+                    this._model.position.x - this.oponente._model.position.x
+                    );
+                    this.combat.landHit('kick', distX, this.oponente.combat);
+                }
+            }
+            
+            
+        else if (this._currentAction !== 'golpear' && this._currentAction !== 'patear') {
             this._UpdateLocomotionAction()
         }else if (this.estaCubriendose && this._currentAction !== 'golpear' && this._currentAction !== 'patear') {
             this._UpdateLocomotionAction(); // Actualiza a animación de bloqueo
