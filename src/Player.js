@@ -79,6 +79,24 @@ export class Player {
     this._attackOutcome = 'none';
     this._attackKind    = null; // 'punch' | 'kick'
 
+    // ── Anti-spam por extremidad ──
+    // El jugador puede encadenar hasta SAME_LIMB_MAX golpes seguidos de la
+    // misma extremidad. Al alcanzar el límite, esa extremidad queda en
+    // cooldown durante LIMB_COOLDOWN segundos (la otra extremidad sigue libre).
+    // Alternar de puño a patada (o viceversa) resetea el contador.
+    // Si el jugador deja de atacar durante LIMB_SERIES_RESET segundos, los
+    // contadores también se resetean.
+    this._SAME_LIMB_MAX     = 2;
+    this._LIMB_COOLDOWN     = 1.2;
+    this._LIMB_SERIES_RESET = 1.2;
+
+    this._punchSeries      = 0;
+    this._kickSeries       = 0;
+    this._punchCooldown    = 0;
+    this._kickCooldown     = 0;
+    this._lastAttackType   = null; // 'punch' | 'kick' | null
+    this._sinceLastAttack  = 0;
+
     // Duración de estados temporales (segundos)
     // Ataques mucho más rápidos → combos fluidos.
     this._HIT_STUN_DURATION = 0.25;
@@ -172,6 +190,9 @@ export class Player {
 
     this.combat.on('death', () => {
       this._transition(PlayerState.KO);
+      // "Finish Him" — sonido de KO. combat.isDead se setea antes de emitir
+      // y death solo se emite una vez por jugador, así que se reproduce 1x.
+      Audio.play('ko');
       console.log(`${this.combat.id} ha muerto`);
     });
   }
@@ -565,24 +586,92 @@ export class Player {
     const attackPressed = this._input.ConsumeAttackPress?.();
     const kickPressed   = this._input.ConsumeKickPress?.();
 
-    if (attackPressed && this._transition(PlayerState.ATTACKING)) {
-      this._attackTimer    = this._ATTACK_DURATION;
-      this._attackOutcome  = 'pending'; // pendiente: aún no sabemos si conectará
-      this._attackKind     = 'punch';
-      this._hitLanded      = false;     // legacy
-      // Alternar lado para este ataque y preparar el siguiente
-      this._currentPunchSide = this._nextPunchSide;
-      this._nextPunchSide    = this._nextPunchSide === 'right' ? 'left' : 'right';
+    // ── PUÑO ──
+    if (attackPressed) {
+      // Bloqueado por cooldown anti-spam (puños): la pulsación se consume y
+      // se ignora. La patada sigue disponible aunque el puño esté en cooldown.
+      if (this._punchCooldown > 0) {
+        // pulsación descartada
+      } else if (this._transition(PlayerState.ATTACKING)) {
+        this._attackTimer    = this._ATTACK_DURATION;
+        this._attackOutcome  = 'pending';
+        this._attackKind     = 'punch';
+        this._hitLanded      = false; // legacy
+        // Alternar lado para este ataque y preparar el siguiente
+        this._currentPunchSide = this._nextPunchSide;
+        this._nextPunchSide    = this._nextPunchSide === 'right' ? 'left' : 'right';
+
+        // ── Anti-spam ──
+        // Si la última extremidad usada fue la patada, esta es una nueva serie
+        if (this._lastAttackType !== 'punch') this._punchSeries = 0;
+        this._punchSeries++;
+        this._kickSeries      = 0;      // alternar resetea el otro contador
+        this._lastAttackType  = 'punch';
+        this._sinceLastAttack = 0;
+
+        if (this._punchSeries >= this._SAME_LIMB_MAX) {
+          // Bloquear el puño durante el cooldown; resetear contador
+          this._punchCooldown = this._LIMB_COOLDOWN;
+          this._punchSeries   = 0;
+        }
+      }
     }
 
-    if (kickPressed && this._transition(PlayerState.KICKING)) {
-      this._attackTimer    = this._KICK_DURATION;
-      this._attackOutcome  = 'pending';
-      this._attackKind     = 'kick';
-      this._hitLanded      = false;
-      this._currentKickSide = this._nextKickSide;
-      this._nextKickSide    = this._nextKickSide === 'right' ? 'left' : 'right';
+    // ── PATADA ──
+    if (kickPressed) {
+      if (this._kickCooldown > 0) {
+        // pulsación descartada
+      } else if (this._transition(PlayerState.KICKING)) {
+        this._attackTimer    = this._KICK_DURATION;
+        this._attackOutcome  = 'pending';
+        this._attackKind     = 'kick';
+        this._hitLanded      = false;
+        this._currentKickSide = this._nextKickSide;
+        this._nextKickSide    = this._nextKickSide === 'right' ? 'left' : 'right';
+
+        if (this._lastAttackType !== 'kick') this._kickSeries = 0;
+        this._kickSeries++;
+        this._punchSeries     = 0;
+        this._lastAttackType  = 'kick';
+        this._sinceLastAttack = 0;
+
+        if (this._kickSeries >= this._SAME_LIMB_MAX) {
+          this._kickCooldown = this._LIMB_COOLDOWN;
+          this._kickSeries   = 0;
+        }
+      }
     }
+  }
+
+  /**
+   * Avanza los temporizadores anti-spam y resetea la serie por inactividad.
+   */
+  _TickLimbCooldowns(delta) {
+    if (this._punchCooldown > 0) {
+      this._punchCooldown -= delta;
+      if (this._punchCooldown < 0) this._punchCooldown = 0;
+    }
+    if (this._kickCooldown > 0) {
+      this._kickCooldown -= delta;
+      if (this._kickCooldown < 0) this._kickCooldown = 0;
+    }
+    this._sinceLastAttack += delta;
+    if (this._sinceLastAttack > this._LIMB_SERIES_RESET) {
+      this._punchSeries = 0;
+      this._kickSeries  = 0;
+      // No reseteamos _lastAttackType porque ya da igual: ambas series están en 0
+    }
+  }
+
+  /**
+   * Lectura de estado para HUD u otros consumidores (opcional).
+   * Devuelve cooldown restante por extremidad y golpes consecutivos actuales.
+   */
+  getLimbCooldownState() {
+    return {
+      punch:  { series: this._punchSeries, cooldown: this._punchCooldown, max: this._SAME_LIMB_MAX },
+      kick:   { series: this._kickSeries,  cooldown: this._kickCooldown,  max: this._SAME_LIMB_MAX },
+    };
   }
 
   // ─── Salto ────────────────────────────────────────────────────────────────
@@ -697,6 +786,9 @@ export class Player {
 
     // Siempre mirar al rival
     if (this.oponente) this.faceTarget(this.oponente);
+
+    // Cooldowns anti-spam (siempre avanzan, también durante stun/hit-recieve)
+    this._TickLimbCooldowns(delta);
 
     // Temporizadores de estado (HIT_RECIEVE, STUNNED, ATTACKING, KICKING)
     this._TickTimers(delta);

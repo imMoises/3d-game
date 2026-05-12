@@ -98,4 +98,11 @@ export function initGameAudio(basePath = 'assets/audios/') {
   Audio.register('kick_hit',   basePath + 'KickHit.ogg',  { volume: 1.0 });
   Audio.register('kick_hit',   basePath + 'KickSlid.ogg', { volume: 0.9 }); // variante
   Audio.register('kick_miss',  basePath + 'KickMiss.ogg', { volume: 0.85 });
+
+  // KO / locutor ("Finish Him") — el nombre del archivo tiene espacios
+  Audio.register(
+    'ko',
+    basePath + encodeURIComponent('Voicy_Mortal Kombat- Finish Him.mp3'),
+    { volume: 1.0 }
+  );
 }
