@@ -99,7 +99,10 @@ export class SceneManager {
 
   /**
    * 1. Evita que los jugadores salgan del escenario.
-   * 2. Evita que se atraviesen entre sí.
+   * 2. Evita que se atraviesen entre sí — EXCEPTO cuando uno está saltando
+   *    por encima del otro: en ese caso pueden cruzarse libremente y, como
+   *    Player.faceTarget() se llama cada frame, automáticamente se reorientan
+   *    para seguir mirándose de frente al aterrizar.
    * 3. Corner push: si uno está en la pared, empuja al otro.
    */
   _ApplyArenaLimits() {
@@ -111,7 +114,17 @@ export class SceneManager {
     m1.position.x = THREE.MathUtils.clamp(m1.position.x, ARENA_MIN_X, ARENA_MAX_X);
     m2.position.x = THREE.MathUtils.clamp(m2.position.x, ARENA_MIN_X, ARENA_MAX_X);
 
-    // 2. Separación mínima entre cuerpos
+    // Si alguno está claramente en el aire, permitir que se atraviesen para
+    // que pueda quedar detrás (cross-up / juggle clásico de fighting games).
+    const airThreshold = Math.min(
+      this._player1._airCrossThreshold ?? 1.5,
+      this._player2._airCrossThreshold ?? 1.5
+    );
+    const p1Air = (m1.position.y - (this._player1._groundY ?? 0)) > airThreshold;
+    const p2Air = (m2.position.y - (this._player2._groundY ?? 0)) > airThreshold;
+    if (p1Air || p2Air) return;
+
+    // 2. Separación mínima entre cuerpos (solo cuando ambos están en el suelo)
     const MIN_DIST = PLAYER_RADIUS * 2;
     const diff     = m2.position.x - m1.position.x;
     const overlap  = MIN_DIST - Math.abs(diff);
@@ -185,7 +198,7 @@ export class SceneManager {
     this._player1 = new Player({
       scene:     this._scene,
       camera:    this._camera,
-      modelPath: 'assets/james/',
+      modelPath: 'assets/Adventurer/Adventurer.fbx',
       position:  p1Pos,
       input:     this._keyboard,
       id:        'p1',
@@ -194,7 +207,7 @@ export class SceneManager {
     this._player2 = new Player({
       scene:     this._scene,
       camera:    this._camera,
-      modelPath: 'assets/james/',
+      modelPath: 'assets/Business-Man/Business-Man.fbx',
       position:  p2Pos,
       input:     this._gamepad,
       id:        'p2',

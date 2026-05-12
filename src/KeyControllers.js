@@ -12,8 +12,10 @@ export class KeyControllers{
             ataque: false,
             patada: false,
             cubrirse: false,
+            saltar: false,
             ataquePressed: false,
             patadaPressed: false,
+            saltarPressed: false,
         }
         document.addEventListener('keydown', (e) => this._onKeyDown(e), false);
         document.addEventListener('keyup', (e) => this._onKeyUp(e), false);
@@ -45,6 +47,12 @@ export class KeyControllers{
         case 76: // L
             this._keys.cubrirse = true;
             break;
+        case 32: // Space → saltar
+            if (!this._keys.saltar) this._keys.saltarPressed = true;
+            this._keys.saltar = true;
+            // Evitar el scroll de la página al usar la barra espaciadora
+            event.preventDefault?.();
+            break;
         }
     }
     _onKeyUp(event) {
@@ -70,6 +78,10 @@ export class KeyControllers{
         case 76: // L
             this._keys.cubrirse = false;
             break;
+        case 32: // Space
+            this._keys.saltar = false;
+            event.preventDefault?.();
+            break;
         }
     }
 
@@ -85,6 +97,12 @@ export class KeyControllers{
     ConsumeKickPress(){
         const p = this._keys.patadaPressed;
         this._keys.patadaPressed = false;
+        return p;
+    }
+
+    ConsumeJumpPress(){
+        const p = this._keys.saltarPressed;
+        this._keys.saltarPressed = false;
         return p;
     }
 
