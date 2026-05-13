@@ -4,6 +4,13 @@ import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.118/build/three.mod
 import { FBXLoader } from 'https://cdn.jsdelivr.net/npm/three@0.118.1/examples/jsm/loaders/FBXLoader.js';
 import { CombatSystem } from './CombatSystem.js';
 import { Audio, initGameAudio } from './AudioManager.js';
+import { PlayerStats, SKILL_TREE } from './PlayerStats.js';
+
+// Modos de juego del Player
+export const PlayerMode = {
+  RPG:    'rpg',
+  COMBAT: 'combat',
+};
 
 // Inicializar el banco de sonidos una sola vez (idempotente porque los Player
 // se crean en el mismo arranque). Si se importa antes de tiempo, igual funciona.
@@ -68,6 +75,10 @@ export class Player {
     this._ATTACK_ANIM_SPEED = 2.4;
     this._KICK_ANIM_SPEED   = 2.2;
 
+    this._scaleRpg    = params.scaleRpg ?? params.scale ?? 0.01;
+    this._scaleCombat = params.scaleCombat ?? 0.1;
+    this.scale        = this._scaleForMode(params.mode || PlayerMode.RPG);
+
     // FSM
     this.state          = PlayerState.IDLE;
     this._hitStunTimer  = 0;
@@ -127,6 +138,18 @@ export class Player {
 
     this.oponente = null;
 
+    // Modo de juego (rpg | combat). Lo controla SceneManager.
+    this._mode = params.mode || PlayerMode.RPG;
+
+    // Referencia al mundo RPG (lo inyecta SceneManager) para resolver ataques
+    // contra enemigos y consultar el estado del mundo.
+    this.rpgWorld = null;
+
+    // Estado del menú de mejoras (RPG)
+    this._upgradeMenuOpen = false;
+    this._menuSelection   = 0;
+    this._menuNavCooldown = 0;
+
     this._input = params.input;
     this._LoadModel();
     this._CreateGuardShield();
@@ -134,6 +157,65 @@ export class Player {
     // Sistema de combate
     this.combat = new CombatSystem(params.id || 'p1');
     this._BindCombatEvents();
+
+    // Stats persistentes (HP, monedas, skill tree)
+    this.stats = new PlayerStats(params.id || 'p1');
+  }
+
+  // ─── Modo (rpg | combat) ──────────────────────────────────────────────────
+
+  _scaleForMode(mode) {
+    return mode === PlayerMode.COMBAT ? this._scaleCombat : this._scaleRpg;
+  }
+
+  _ApplyScaleForMode() {
+    this.scale = this._scaleForMode(this._mode);
+    if (!this._model) return;
+
+    this._model.scale.setScalar(this.scale);
+    this._CalibrateFromModelBounds();
+  }
+
+  setMode(mode) {
+    if (this._mode === mode) return;
+    this._mode = mode;
+
+    if (mode === PlayerMode.COMBAT) {
+      // Aplicar bonificaciones del skill tree al combate
+      this.stats.applyToCombatSystem(this.combat);
+      // Resetear estado de combate
+      this.combat.hp          = this.combat._hpMaxOverride ?? CombatSystem.HP_MAX;
+      this.combat.guard       = CombatSystem.GUARD_MAX;
+      this.combat.guardBroken = false;
+      this.combat.isDead      = false;
+      this.combat.isStunned   = false;
+      this.combat.comboHitsLanded   = 0;
+      this.combat.comboHitsReceived = 0;
+      this.state = PlayerState.IDLE;
+      this._upgradeMenuOpen = false;
+    } else {
+      // Volver a RPG: cerrar menú, restaurar HP RPG si quedó en 0
+      this._upgradeMenuOpen = false;
+      if (this.stats.hp_current <= 0) {
+        this.stats.hp_current = this.stats.hp_max;
+      }
+      this.state = PlayerState.IDLE;
+    }
+
+    this._ApplyScaleForMode();
+  }
+
+  get mode() { return this._mode; }
+
+  // ─── Callback: un enemigo le pegó al jugador ─────────────────────────────
+  _OnEnemyHit(damage) {
+    if (this._mode !== PlayerMode.RPG) return;
+    if (this.stats.hp_current <= 0) return;
+    this.stats.takeDamage(damage);
+    // Reusar la animación de hit-recieve si la hay
+    this._hitStunTimer   = this._HIT_STUN_DURATION;
+    this._currentHitKind = 'punch';
+    this._transition(PlayerState.HIT_RECIEVE);
   }
 
   // ─── Eventos de combate ────────────────────────────────────────────────────
@@ -203,7 +285,7 @@ export class Player {
   _LoadModel() {
     const loader = new FBXLoader();
     loader.load(this._params.modelPath, (fbx) => {
-      fbx.scale.setScalar(0.1);
+      fbx.scale.setScalar(this.scale);
       fbx.traverse(c => {
         c.castShadow = true;
         c.layers.set(1);
@@ -518,6 +600,18 @@ export class Player {
     // Aún no entramos a la ventana → esperar
     if (progress < this._ACTIVE_START) return;
 
+    // ── Modo RPG: pegar a enemigos en cono frontal ─────────────────────
+    if (this._mode === PlayerMode.RPG) {
+      if (!this.rpgWorld) return;
+      const connected = this.rpgWorld.playerAttack(this, type);
+      if (connected) {
+        this._attackOutcome = 'hit';
+        Audio.play(type === 'punch' ? 'punch_hit' : 'kick_hit');
+      }
+      return;
+    }
+
+    // ── Modo combate 1v1: lógica original ──────────────────────────────
     if (!this.oponente?._model) return;
 
     const distX = Math.abs(
@@ -556,6 +650,63 @@ export class Player {
     } else if (!moving && this.state === PlayerState.WALKING) {
       this._transition(PlayerState.IDLE);
     }
+  }
+
+  // ─── Movimiento 3D (modo RPG) ─────────────────────────────────────────────
+  _HandleRpgMovement(delta) {
+    if (this._upgradeMenuOpen) {
+      // Mientras el menú está abierto el jugador no se mueve
+      if (this.state === PlayerState.WALKING) this._transition(PlayerState.IDLE);
+      return;
+    }
+
+    // Ejes analógicos (gamepad) o discretos (teclado vía GetAxisX/Y)
+    const ax = this._input.GetAxisX?.() ?? 0;
+    const ay = this._input.GetAxisY?.() ?? 0;
+    const mag = Math.hypot(ax, ay);
+
+    const moving = mag > 0.05;
+    if (moving) {
+      // Normalizar para evitar diagonales más rápidas
+      const nx = ax / mag;
+      const nz = ay / mag;
+      const bonus = (this.stats?.speed_bonus ?? 0);
+      const v = (this._moveSpeed + bonus) * Math.min(mag, 1);
+      this._model.position.x += nx * v * delta;
+      this._model.position.z += nz * v * delta;
+
+      // Orientación: usar lookAt (misma convención que faceTarget) para que
+      // la "frente" visual coincida con la dirección de movimiento.
+      // Interpolación por quaternion para que el giro sea suave.
+      if (!this._rpgLookHelper) {
+        this._rpgLookHelper = new THREE.Object3D();
+      }
+      const helper = this._rpgLookHelper;
+      helper.position.copy(this._model.position);
+      helper.lookAt(
+        this._model.position.x + nx,
+        this._model.position.y,
+        this._model.position.z + nz,
+      );
+      this._model.quaternion.slerp(helper.quaternion, Math.min(1, delta * 14));
+    }
+
+    if (moving && this.state === PlayerState.IDLE) {
+      this._transition(PlayerState.WALKING);
+    } else if (!moving && this.state === PlayerState.WALKING) {
+      this._transition(PlayerState.IDLE);
+    }
+  }
+
+  // Devuelve el vector "forward" del jugador en XZ (para el minimapa).
+  getForwardXZ() {
+    if (!this._model) return { x: 0, z: 1 };
+    // Como lookAt orienta -Z hacia el target, la "frente" del modelo es -Z local
+    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this._model.quaternion);
+    fwd.y = 0;
+    if (fwd.lengthSq() < 1e-6) return { x: 0, z: 1 };
+    fwd.normalize();
+    return { x: fwd.x, z: fwd.z };
   }
 
   // ─── Input de combate ─────────────────────────────────────────────────────
@@ -678,16 +829,80 @@ export class Player {
     }
   }
 
+  // ─── Menú de mejoras (modo RPG) ───────────────────────────────────────────
+  _HandleUpgradeMenu(delta) {
+    if (this._mode !== PlayerMode.RPG) return;
+    // Toggle abrir/cerrar
+    if (this._input.ConsumeUpgradePress?.()) {
+      this._upgradeMenuOpen = !this._upgradeMenuOpen;
+      this._menuSelection = 0;
+    }
+    if (!this._upgradeMenuOpen) return;
+
+    // Navegación: ay del eje vertical, con cooldown anti-spam
+    this._menuNavCooldown -= delta;
+    const ay = this._input.GetAxisY?.() ?? 0;
+    if (this._menuNavCooldown <= 0) {
+      if (ay < -0.4) {
+        this._menuSelection -= 1;
+        this._menuNavCooldown = 0.18;
+      } else if (ay > 0.4) {
+        this._menuSelection += 1;
+        this._menuNavCooldown = 0.18;
+      }
+    }
+
+    // Confirmar compra con ataque (J o A)
+    if (this._input.ConsumeAttackPress?.()) {
+      this._tryBuySelectedSkill();
+    }
+  }
+
+  // Lista de skills visibles en el menú (mismo filtrado que RPGHud para que
+  // el índice de selección coincida con lo que se renderiza).
+  getVisibleSkills() {
+    return SKILL_TREE
+      .map((node) => {
+        const owned    = this.stats.unlocked.has(node.id);
+        const prereqOK = !node.requires || this.stats.unlocked.has(node.requires);
+        return { node, owned, prereqOK };
+      })
+      .filter((it) => it.owned || it.prereqOK);
+  }
+
+  _tryBuySelectedSkill() {
+    const visible = this.getVisibleSkills();
+    if (visible.length === 0) return;
+    const idx = ((this._menuSelection % visible.length) + visible.length) % visible.length;
+    const it  = visible[idx];
+    if (it.owned) return;
+    this.stats.buy(it.node.id);
+  }
+
+  // Selección actual normalizada al rango de items visibles
+  get menuSelectionNormalized() {
+    const visible = this.getVisibleSkills();
+    if (visible.length === 0) return 0;
+    return ((this._menuSelection % visible.length) + visible.length) % visible.length;
+  }
+
   // ─── Update principal ─────────────────────────────────────────────────────
 
   Update(delta) {
     if (!this._model || !this._mixer) return;
 
-    // Siempre actualizar el sistema de combate (regenera guardia, etc.)
+    if (this._mode === PlayerMode.RPG) {
+      this._UpdateRpg(delta);
+    } else {
+      this._UpdateCombat(delta);
+    }
+  }
+
+  // ── Update específico para modo COMBATE 1v1 (lógica original) ──────────────
+  _UpdateCombat(delta) {
     const cubriendo = this._input._keys?.cubrirse ?? false;
     this.combat.update(delta, cubriendo);
 
-    // Bloquear todo si está muerto, pero mantener animación de Death y escudo oculto
     if (this.combat.isDead) {
       this._UpdateAnimation();
       this._UpdateGuardShield(delta);
@@ -695,13 +910,9 @@ export class Player {
       return;
     }
 
-    // Siempre mirar al rival
     if (this.oponente) this.faceTarget(this.oponente);
-
-    // Temporizadores de estado (HIT_RECIEVE, STUNNED, ATTACKING, KICKING)
     this._TickTimers(delta);
 
-    // Bloqueo: solo si está en el suelo y no en estados restringidos
     if (!MOVEMENT_LOCKED.has(this.state) && this._isGrounded && this.state !== PlayerState.JUMPING) {
       if (cubriendo) {
         this._transition(PlayerState.BLOCKING);
@@ -710,28 +921,76 @@ export class Player {
       }
     }
 
-    // Salto: leer input antes de aplicar física vertical
     if (!MOVEMENT_LOCKED.has(this.state) && this.state !== PlayerState.BLOCKING) {
       this._HandleJumpInput();
     }
     this._UpdateJump(delta);
 
-    // Movimiento solo si el estado lo permite (también se permite en el aire)
     const canMove = (!MOVEMENT_LOCKED.has(this.state) && this.state !== PlayerState.BLOCKING)
                   || this.state === PlayerState.JUMPING;
     if (canMove) this._HandleMovement(delta);
 
-    // Input de ataque solo si el estado lo permite
     if (!ATTACK_LOCKED.has(this.state)) {
       this._HandleCombatInput();
     }
 
-    // Animación según estado
     this._UpdateAnimation();
-
-    // Escudo de guardia
     this._UpdateGuardShield(delta);
-
     this._mixer.update(delta);
+  }
+
+  // ── Update específico para modo RPG ────────────────────────────────────────
+  _UpdateRpg(delta) {
+    // Regenerar HP si tiene la skill correspondiente
+    this.stats?.tickRegen(delta);
+
+    // No usamos guardia ni escudo en RPG: ocultar el shield
+    if (this._shieldMesh) {
+      this._shieldMesh.visible = false;
+      this._shieldScale = 0;
+    }
+
+    // Si el jugador "murió" en RPG, lo dejamos quieto hasta respawn
+    if (this.stats?.hp_current <= 0) {
+      this._UpdateAnimation();
+      this._mixer.update(delta);
+      return;
+    }
+
+    // Menú de mejoras: si está abierto bloquea movimiento y ataque
+    this._HandleUpgradeMenu(delta);
+
+    if (!this._upgradeMenuOpen) {
+      this._TickTimers(delta);
+
+      if (!MOVEMENT_LOCKED.has(this.state)) {
+        this._HandleJumpInput();
+      }
+      this._UpdateJump(delta);
+
+      const canMove = !MOVEMENT_LOCKED.has(this.state) || this.state === PlayerState.JUMPING;
+      if (canMove) this._HandleRpgMovement(delta);
+
+      if (!ATTACK_LOCKED.has(this.state)) {
+        this._HandleCombatInput();
+      }
+    } else {
+      // En menú: solo terminar timers de ataques / hits si quedaron en curso
+      this._TickTimers(delta);
+      this._UpdateJump(delta);
+    }
+
+    this._UpdateAnimation();
+    this._mixer.update(delta);
+  }
+
+  // ─── Helper público para que SceneManager respawne al jugador ─────────────
+  rpgRespawn(position) {
+    if (!this._model) return;
+    this._model.position.copy(position);
+    this._velocityY  = 0;
+    this._isGrounded = true;
+    this.stats.hp_current = this.stats.hp_max;
+    this.state = PlayerState.IDLE;
   }
 }

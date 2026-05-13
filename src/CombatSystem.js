@@ -45,6 +45,12 @@ export class CombatSystem {
   constructor(id) {
     this.id = id;
 
+    // Overrides opcionales aplicados por PlayerStats al transicionar a combate.
+    this._hpMaxOverride    = null;
+    this._dmgPunchOverride = null;
+    this._dmgKickOverride  = null;
+    this._knockbackBonus   = 0;
+
     this.hp     = CombatSystem.HP_MAX;
     this.isDead = false;
 
@@ -166,9 +172,10 @@ export class CombatSystem {
   // ─── getState ────────────────────────────────────────────────────────────
 
   getState() {
+    const hpMax = this._hpMaxOverride ?? CombatSystem.HP_MAX;
     return {
       hp:           this.hp,
-      hpPercent:    this.hp / CombatSystem.HP_MAX,
+      hpPercent:    this.hp / hpMax,
       guard:        this.guard,
       guardPercent: this.guard / CombatSystem.GUARD_MAX,
       guardBroken:  this.guardBroken,
@@ -205,8 +212,12 @@ export class CombatSystem {
       damage    = attackType === 'punch' ? CombatSystem.DMG_PUNCH_BLOCK : CombatSystem.DMG_KICK_BLOCK;
       knockback = 0;
     } else {
-      damage    = attackType === 'punch' ? CombatSystem.DMG_PUNCH : CombatSystem.DMG_KICK;
-      knockback = attackType === 'punch' ? CombatSystem.KNOCKBACK_PUNCH : CombatSystem.KNOCKBACK_KICK;
+      // Aplicar overrides del atacante (skill tree del modo RPG) si existen.
+      const punchDmg = attacker._dmgPunchOverride ?? CombatSystem.DMG_PUNCH;
+      const kickDmg  = attacker._dmgKickOverride  ?? CombatSystem.DMG_KICK;
+      damage    = attackType === 'punch' ? punchDmg : kickDmg;
+      const kbBase = attackType === 'punch' ? CombatSystem.KNOCKBACK_PUNCH : CombatSystem.KNOCKBACK_KICK;
+      knockback = kbBase + (attacker._knockbackBonus ?? 0);
     }
 
     this.hp = Math.max(0, this.hp - damage);

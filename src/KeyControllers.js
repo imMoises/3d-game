@@ -16,6 +16,11 @@ export class KeyControllers{
             ataquePressed: false,
             patadaPressed: false,
             saltarPressed: false,
+            // Nuevos para RPG / modo
+            mejorar: false,       // E
+            mejorarPressed: false,
+            modoToggle: false,    // R
+            modoTogglePressed: false,
         }
         document.addEventListener('keydown', (e) => this._onKeyDown(e), false);
         document.addEventListener('keyup', (e) => this._onKeyUp(e), false);
@@ -53,6 +58,14 @@ export class KeyControllers{
             // Evitar el scroll de la página al usar la barra espaciadora
             event.preventDefault?.();
             break;
+        case 69: // E → menú de mejora RPG
+            if (!this._keys.mejorar) this._keys.mejorarPressed = true;
+            this._keys.mejorar = true;
+            break;
+        case 82: // R → toggle modo (RPG ⇄ Combate)
+            if (!this._keys.modoToggle) this._keys.modoTogglePressed = true;
+            this._keys.modoToggle = true;
+            break;
         }
     }
     _onKeyUp(event) {
@@ -82,6 +95,12 @@ export class KeyControllers{
             this._keys.saltar = false;
             event.preventDefault?.();
             break;
+        case 69: // E
+            this._keys.mejorar = false;
+            break;
+        case 82: // R
+            this._keys.modoToggle = false;
+            break;
         }
     }
 
@@ -104,6 +123,27 @@ export class KeyControllers{
         const p = this._keys.saltarPressed;
         this._keys.saltarPressed = false;
         return p;
+    }
+
+    ConsumeUpgradePress(){
+        const p = this._keys.mejorarPressed;
+        this._keys.mejorarPressed = false;
+        return p;
+    }
+
+    ConsumeModeTogglePress(){
+        const p = this._keys.modoTogglePressed;
+        this._keys.modoTogglePressed = false;
+        return p;
+    }
+
+    // Eje virtual a partir de WASD para movimiento 3D RPG
+    GetAxisX(){
+        return (this._keys.derecha ? 1 : 0) - (this._keys.izquierda ? 1 : 0);
+    }
+    GetAxisY(){
+        // Convención: arriba en pantalla = -Y (igual que el stick)
+        return (this._keys.atras ? 1 : 0) - (this._keys.adelante ? 1 : 0);
     }
 
 }
