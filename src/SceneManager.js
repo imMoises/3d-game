@@ -4,15 +4,14 @@ import { CombatHUD } from './CombatHUD.js';
 import { KeyControllers } from './KeyControllers.js';
 import { GamepadController } from './GamepadController.js';
 
-// ─── Límites de arena ───────────────────────────────────────────────────────
+// ─── Límites de arena ─────────────────────────────────────────────────────────
 const ARENA_MIN_X   = -38;
 const ARENA_MAX_X   =  38;
 const PLAYER_RADIUS =   2.5;  // mitad del ancho del personaje (ajusta a tu escala)
 
 export class SceneManager {
 
-  constructor(selectedCharacters = null) {
-    this._selectedCharacters = selectedCharacters;
+  constructor() {
     this._Init();
   }
 
@@ -44,7 +43,7 @@ export class SceneManager {
     this._RAF();
   }
 
-  // ─── Cámara ─────────────────────────────────────────────────────────
+  // ─── Cámara ────────────────────────────────────────────────────────────────
 
   _CrearCamara() {
     this._camera = new THREE.PerspectiveCamera(
@@ -182,7 +181,7 @@ export class SceneManager {
     this._scene.add(plane);
   }
 
-  // ─── Resize ─────────────────────────────────────────────────────────
+  // ─── Resize ────────────────────────────────────────────────────────────────
 
   _OnWindowResize() {
     this._camera.aspect = window.innerWidth / window.innerHeight;
@@ -190,26 +189,16 @@ export class SceneManager {
     this._threejs.setSize(window.innerWidth, window.innerHeight);
   }
 
-  // ─── Personajes ────────────────────────────────────────────────────────
+  // ─── Personajes ────────────────────────────────────────────────────────────
 
   _CrearPersonaje() {
     const p1Pos = new THREE.Vector3(-38, 0, 0);
     const p2Pos = new THREE.Vector3( 38, 0, 0);
 
-    // Usar personajes seleccionados o por defecto
-    const p1Character = this._selectedCharacters?.player1 || {
-      name: 'Aventurero',
-      modelPath: 'assets/Adventurer/Adventurer.fbx',
-    };
-    const p2Character = this._selectedCharacters?.player2 || {
-      name: 'Hombre de Negocios',
-      modelPath: 'assets/Business-Man/Business-Man.fbx',
-    };
-
     this._player1 = new Player({
       scene:     this._scene,
       camera:    this._camera,
-      modelPath: p1Character.modelPath,
+      modelPath: 'assets/Adventurer/Adventurer.fbx',
       position:  p1Pos,
       input:     this._keyboard,
       id:        'p1',
@@ -218,7 +207,7 @@ export class SceneManager {
     this._player2 = new Player({
       scene:     this._scene,
       camera:    this._camera,
-      modelPath: p2Character.modelPath,
+      modelPath: 'assets/Business-Man/Business-Man.fbx',
       position:  p2Pos,
       input:     this._gamepad,
       id:        'p2',
@@ -228,7 +217,7 @@ export class SceneManager {
     this._player2.oponente = this._player1;
   }
 
-  // ─── Loop principal ───────────────────────────────────────────────────────
+  // ─── Loop principal ────────────────────────────────────────────────────────
 
   _RAF() {
     requestAnimationFrame(() => {
