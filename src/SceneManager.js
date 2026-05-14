@@ -5,6 +5,13 @@ import { KeyControllers } from './KeyControllers.js';
 import { GamepadController } from './GamepadController.js';
 import { RPGWorld } from './RPGWorld.js';
 import { RPGHud }   from './RPGHud.js';
+import { Audio, initGameAudio } from './AudioManager.js';
+
+// ── Volumen de la música de fondo ──────────────────────────────────────────
+// Variable global para regular fácilmente: se aplica a la música actual.
+// 0 = silenciada, 1 = volumen máximo. Empezamos algo bajita para que no
+// tape los efectos de combate.
+export const BACKGROUND_MUSIC_VOLUME = 0.35;
 
 // ─── Límites de arena de combate ──────────────────────────────────────────────
 const ARENA_MIN_X   = -38;
@@ -60,6 +67,14 @@ export class SceneManager {
 
     // Aplicar visibilidad inicial según el modo
     this._SyncModeUI();
+
+    // ── Audio: registrar banco de sonidos y arrancar música RPG ──────────
+    // initGameAudio() es idempotente desde Player.js, pero también podemos
+    // llamarlo aquí por si SceneManager se inicializa primero.
+    initGameAudio('assets/audios/');
+    Audio.setMusicVolume(BACKGROUND_MUSIC_VOLUME);
+    // El juego arranca en RPG → suena la música de aventura en bucle.
+    Audio.playMusic('bgm_rpg');
 
     this._RAF();
   }
@@ -260,6 +275,9 @@ export class SceneManager {
   _EnterCombatMode() {
     this._mode = PlayerMode.COMBAT;
 
+    // Música: cambiar a la de pelea
+    Audio.playMusic('bgm_combat');
+
     // Colocar jugadores en extremos de la arena, mirándose
     if (this._player1?._model) {
       this._player1._model.position.set(ARENA_MIN_X + 4, 0, 0);
@@ -289,6 +307,9 @@ export class SceneManager {
 
   _EnterRpgMode() {
     this._mode = PlayerMode.RPG;
+
+    // Música: volver a la de aventura
+    Audio.playMusic('bgm_rpg');
 
     // Reposicionar jugadores en spawn RPG
     this._player1?.rpgRespawn(RPG_SPAWN_P1);

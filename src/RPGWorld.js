@@ -74,6 +74,18 @@ const DECOR_FLOWERS = [
   { path: 'assets/entorno/obj/Clover/Clover_1.fbx',                  scale: 0.025 },
 ];
 
+// Radio de colisión base por categoría de decoración. Se escala con el
+// scale real aplicado a la malla (incluye jitter), así un árbol pequeño
+// tiene hitbox más chica que uno grande. Hierba y flores = 0 (no chocan).
+const COLLISION_RADIUS_TREE  = 1.10;
+const COLLISION_RADIUS_BUSH  = 0.70;
+const COLLISION_RADIUS_ROCK  = 0.85;
+const COLLISION_RADIUS_GRASS = 0;
+const COLLISION_RADIUS_FLOWER = 0;
+
+// Radio del cuerpo del jugador en colisión con la decoración (RPG).
+const PLAYER_COLLISION_RADIUS = 0.7;
+
 export class RPGWorld {
 
   constructor(scene) {
@@ -84,6 +96,10 @@ export class RPGWorld {
     this._players = [];
     this._active  = true;
     this._objectsHidden = false;
+
+    // Obstáculos sólidos del mapa: [{ x, z, radius }]
+    // Se llenan dinámicamente conforme se cargan los modelos FBX.
+    this._obstacles = [];
 
     this._BuildEnvironment();
   }
@@ -171,7 +187,7 @@ export class RPGWorld {
       return slice;
     };
 
-    const placeAt = async (set, points, scaleJitter = 0.25) => {
+    const placeAt = async (set, points, scaleJitter = 0.25, collisionBase = 0) => {
       for (const pt of points) {
         const def = set[(Math.random() * set.length) | 0];
         try {
@@ -187,19 +203,62 @@ export class RPGWorld {
             }
           });
           this._group.add(object);
+
+          // Registrar como obstáculo si la categoría es sólida.
+          // Escalamos el radio según el factor de escala REAL aplicado
+          // a la malla (def.scale es la escala "promedio" de la categoría).
+          if (collisionBase > 0 && def.scale > 0) {
+            const scaledRadius = collisionBase * (s / def.scale);
+            this._obstacles.push({ x: pt.x, z: pt.z, radius: scaledRadius });
+          }
         } catch (_) { /* asset faltante: ignorar */ }
       }
     };
 
     // Cantidades AJUSTADAS A LA BAJA para no sobrecargar el render.
     // Total: ~50 instancias (antes ~183). Repartidas por toda la grilla.
+    // Solo árboles, arbustos y rocas tienen colisión. Hierba/flores no.
     await Promise.all([
-      placeAt(trees,   takePoints(14), 0.30),
-      placeAt(grasses, takePoints(16), 0.40),
-      placeAt(bushes,  takePoints(8),  0.25),
-      placeAt(rocks,   takePoints(6),  0.30),
-      placeAt(flowers, takePoints(10), 0.30),
+      placeAt(trees,   takePoints(14), 0.30, COLLISION_RADIUS_TREE),
+      placeAt(grasses, takePoints(16), 0.40, COLLISION_RADIUS_GRASS),
+      placeAt(bushes,  takePoints(8),  0.25, COLLISION_RADIUS_BUSH),
+      placeAt(rocks,   takePoints(6),  0.30, COLLISION_RADIUS_ROCK),
+      placeAt(flowers, takePoints(10), 0.30, COLLISION_RADIUS_FLOWER),
     ]);
+  }
+
+  // ─── Colisiones con la decoración ────────────────────────────────────────
+  /**
+   * Empuja al jugador fuera de cualquier obstáculo sólido en el que se haya
+   * "metido" tras moverse. Resolución radial XZ (cilindros verticales).
+   *
+   * @param {THREE.Object3D} model         El modelo del jugador (se modifica .position)
+   * @param {number}        [playerRadius] Radio del cuerpo del jugador
+   */
+  resolveCollisions(model, playerRadius = PLAYER_COLLISION_RADIUS) {
+    if (!this._active || !model) return;
+    if (this._obstacles.length === 0) return;
+
+    // Una pasada es suficiente porque los obstáculos están separados.
+    // Leemos model.position fresh en cada iteración para que las colisiones
+    // cascadeen si el jugador toca dos obstáculos casi contiguos.
+    for (const obs of this._obstacles) {
+      const dx = model.position.x - obs.x;
+      const dz = model.position.z - obs.z;
+      const dist = Math.hypot(dx, dz);
+      const minDist = obs.radius + playerRadius;
+
+      if (dist >= minDist) continue;
+
+      if (dist < 1e-4) {
+        // Estamos exactamente en el centro del obstáculo → empuje arbitrario.
+        model.position.x += minDist;
+      } else {
+        const push = (minDist - dist) / dist;
+        model.position.x += dx * push;
+        model.position.z += dz * push;
+      }
+    }
   }
 
   setPlayers(p1, p2) {

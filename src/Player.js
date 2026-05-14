@@ -90,6 +90,22 @@ export class Player {
     this._attackOutcome = 'none';
     this._attackKind    = null; // 'punch' | 'kick'
 
+    // ── Anti-spam por extremidad ──
+    // Hasta SAME_LIMB_MAX golpes consecutivos de la misma extremidad. Tras
+    // el 4º, esa extremidad queda en cooldown durante LIMB_COOLDOWN segundos
+    // (la otra extremidad sigue libre). Alternar o quedarse inactivo
+    // LIMB_SERIES_RESET segundos también resetea el contador.
+    this._SAME_LIMB_MAX     = 4;
+    this._LIMB_COOLDOWN     = 1.6;
+    this._LIMB_SERIES_RESET = 1.2;
+
+    this._punchSeries      = 0;
+    this._kickSeries       = 0;
+    this._punchCooldown    = 0;
+    this._kickCooldown     = 0;
+    this._lastAttackType   = null; // 'punch' | 'kick' | null
+    this._sinceLastAttack  = 0;
+
     // Duración de estados temporales (segundos)
     // Ataques mucho más rápidos → combos fluidos.
     this._HIT_STUN_DURATION = 0.25;
@@ -270,6 +286,9 @@ export class Player {
 
     this.combat.on('death', () => {
       this._transition(PlayerState.KO);
+      // "Finish Him" — sólo se reproduce 1× porque combat.isDead bloquea
+      // emisiones posteriores del evento.
+      Audio.play('ko');
       console.log(`${this.combat.id} ha muerto`);
     });
   }
@@ -710,6 +729,12 @@ export class Player {
       this._model.quaternion.slerp(helper.quaternion, Math.min(1, delta * 22));
     }
 
+    // ── Colisiones con la decoración del mundo ──
+    // Empujar al jugador fuera de árboles, rocas y arbustos. Se llama
+    // siempre (no solo al moverse) para resolver casos donde un obstáculo
+    // se carga después de que el jugador ya estaba parado en su sitio.
+    this.rpgWorld?.resolveCollisions?.(this._model);
+
     if (moving && this.state === PlayerState.IDLE) {
       this._transition(PlayerState.WALKING);
     } else if (!moving && this.state === PlayerState.WALKING) {
@@ -735,24 +760,86 @@ export class Player {
     const attackPressed = this._input.ConsumeAttackPress?.();
     const kickPressed   = this._input.ConsumeKickPress?.();
 
-    if (attackPressed && this._transition(PlayerState.ATTACKING)) {
-      this._attackTimer    = this._ATTACK_DURATION;
-      this._attackOutcome  = 'pending'; // pendiente: aún no sabemos si conectará
-      this._attackKind     = 'punch';
-      this._hitLanded      = false;     // legacy
-      // Alternar lado para este ataque y preparar el siguiente
-      this._currentPunchSide = this._nextPunchSide;
-      this._nextPunchSide    = this._nextPunchSide === 'right' ? 'left' : 'right';
+    // ── PUÑO ──
+    if (attackPressed) {
+      if (this._punchCooldown > 0) {
+        // Pulsación descartada (puño en cooldown). La patada sigue disponible.
+      } else if (this._transition(PlayerState.ATTACKING)) {
+        this._attackTimer    = this._ATTACK_DURATION;
+        this._attackOutcome  = 'pending'; // aún no sabemos si conectará
+        this._attackKind     = 'punch';
+        this._hitLanded      = false;     // legacy
+        // Alternar lado para este ataque y preparar el siguiente
+        this._currentPunchSide = this._nextPunchSide;
+        this._nextPunchSide    = this._nextPunchSide === 'right' ? 'left' : 'right';
+
+        // ── Anti-spam ──
+        if (this._lastAttackType !== 'punch') this._punchSeries = 0;
+        this._punchSeries++;
+        this._kickSeries      = 0;      // alternar resetea el otro contador
+        this._lastAttackType  = 'punch';
+        this._sinceLastAttack = 0;
+
+        if (this._punchSeries >= this._SAME_LIMB_MAX) {
+          this._punchCooldown = this._LIMB_COOLDOWN;
+          this._punchSeries   = 0;
+        }
+      }
     }
 
-    if (kickPressed && this._transition(PlayerState.KICKING)) {
-      this._attackTimer    = this._KICK_DURATION;
-      this._attackOutcome  = 'pending';
-      this._attackKind     = 'kick';
-      this._hitLanded      = false;
-      this._currentKickSide = this._nextKickSide;
-      this._nextKickSide    = this._nextKickSide === 'right' ? 'left' : 'right';
+    // ── PATADA ──
+    if (kickPressed) {
+      if (this._kickCooldown > 0) {
+        // Pulsación descartada (patada en cooldown).
+      } else if (this._transition(PlayerState.KICKING)) {
+        this._attackTimer    = this._KICK_DURATION;
+        this._attackOutcome  = 'pending';
+        this._attackKind     = 'kick';
+        this._hitLanded      = false;
+        this._currentKickSide = this._nextKickSide;
+        this._nextKickSide    = this._nextKickSide === 'right' ? 'left' : 'right';
+
+        if (this._lastAttackType !== 'kick') this._kickSeries = 0;
+        this._kickSeries++;
+        this._punchSeries     = 0;
+        this._lastAttackType  = 'kick';
+        this._sinceLastAttack = 0;
+
+        if (this._kickSeries >= this._SAME_LIMB_MAX) {
+          this._kickCooldown = this._LIMB_COOLDOWN;
+          this._kickSeries   = 0;
+        }
+      }
     }
+  }
+
+  /**
+   * Avanza los temporizadores anti-spam y resetea la serie por inactividad.
+   */
+  _TickLimbCooldowns(delta) {
+    if (this._punchCooldown > 0) {
+      this._punchCooldown -= delta;
+      if (this._punchCooldown < 0) this._punchCooldown = 0;
+    }
+    if (this._kickCooldown > 0) {
+      this._kickCooldown -= delta;
+      if (this._kickCooldown < 0) this._kickCooldown = 0;
+    }
+    this._sinceLastAttack += delta;
+    if (this._sinceLastAttack > this._LIMB_SERIES_RESET) {
+      this._punchSeries = 0;
+      this._kickSeries  = 0;
+    }
+  }
+
+  /**
+   * Estado anti-spam por extremidad (para HUD u otros consumidores).
+   */
+  getLimbCooldownState() {
+    return {
+      punch: { series: this._punchSeries, cooldown: this._punchCooldown, max: this._SAME_LIMB_MAX },
+      kick:  { series: this._kickSeries,  cooldown: this._kickCooldown,  max: this._SAME_LIMB_MAX },
+    };
   }
 
   // ─── Salto ────────────────────────────────────────────────────────────────
@@ -949,6 +1036,10 @@ export class Player {
     }
 
     if (this.oponente) this.faceTarget(this.oponente);
+
+    // Cooldowns anti-spam (siempre avanzan, también durante stun/hit-recieve)
+    this._TickLimbCooldowns(delta);
+
     this._TickTimers(delta);
 
     if (!MOVEMENT_LOCKED.has(this.state) && this._isGrounded && this.state !== PlayerState.JUMPING) {
@@ -994,6 +1085,9 @@ export class Player {
       this._mixer.update(delta);
       return;
     }
+
+    // Cooldowns anti-spam (avanzan también con el menú abierto)
+    this._TickLimbCooldowns(delta);
 
     // Menú de mejoras: si está abierto bloquea movimiento y ataque
     this._HandleUpgradeMenu(delta);
