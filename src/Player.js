@@ -97,9 +97,11 @@ export class Player {
     this._ATTACK_DURATION   = 0.26;
     this._KICK_DURATION     = 0.80;
 
-    // Hitbox extendida: fracción de la duración del ataque que son "frames activos"
-    this._ACTIVE_START = 0.20;  // 20% del clip → empieza el golpe
-    this._ACTIVE_END   = 0.75;  // 75% del clip → termina el golpe
+    // Hitbox extendida: fracción de la duración del ataque que son "frames activos".
+    // Ampliada (10%–95%) para que conectar combos sea consistente — antes
+    // muchas pulsaciones legítimas fallaban por unos pocos frames.
+    this._ACTIVE_START = 0.10;
+    this._ACTIVE_END   = 0.95;
 
     // Alternancia de golpes (cada pulsación cambia el lado)
     this._nextPunchSide = 'right'; // 'right' | 'left'
@@ -181,25 +183,39 @@ export class Player {
     this._mode = mode;
 
     if (mode === PlayerMode.COMBAT) {
-      // Aplicar bonificaciones del skill tree al combate
+      // Aplicar TODAS las mejoras del árbol de skills al sistema de combate.
+      // applyToCombatSystem() escribe:
+      //   _hpMaxOverride    = stats.hp_max     (techo de HP en combate)
+      //   _dmgPunchOverride = stats.dmg_punch  (daño de puño)
+      //   _dmgKickOverride  = stats.dmg_kick   (daño de patada)
+      //   _knockbackBonus   = stats.knockback_bonus
+      //   combat.hp         = stats.hp_max     (vida llena al iniciar)
       this.stats.applyToCombatSystem(this.combat);
-      // Resetear estado de combate
+
+      // El combate SIEMPRE empieza con la vida MÁXIMA mejorada, sin importar
+      // cuánta vida le quedaba al jugador en el mundo RPG.
       this.combat.hp          = this.combat._hpMaxOverride ?? CombatSystem.HP_MAX;
       this.combat.guard       = CombatSystem.GUARD_MAX;
       this.combat.guardBroken = false;
       this.combat.isDead      = false;
       this.combat.isStunned   = false;
+      this.combat.stunTimer   = 0;
       this.combat.comboHitsLanded   = 0;
       this.combat.comboHitsReceived = 0;
+      this.combat.comboResetTimer   = 0;
+      this.combat.comboDisplayTimer = 0;
       this.state = PlayerState.IDLE;
+      this._hitStunTimer = 0;
+      this._attackTimer  = 0;
       this._upgradeMenuOpen = false;
     } else {
-      // Volver a RPG: cerrar menú, restaurar HP RPG si quedó en 0
+      // Volver a RPG: restaurar HP RPG al máximo (mismo "rest" que da el
+      // combate). Mantenemos las mejoras compradas (hp_max, dmg, etc).
       this._upgradeMenuOpen = false;
-      if (this.stats.hp_current <= 0) {
-        this.stats.hp_current = this.stats.hp_max;
-      }
+      this.stats.hp_current = this.stats.hp_max;
       this.state = PlayerState.IDLE;
+      this._hitStunTimer = 0;
+      this._attackTimer  = 0;
     }
 
     this._ApplyScaleForMode();
@@ -688,7 +704,10 @@ export class Player {
         this._model.position.y,
         this._model.position.z + nz,
       );
-      this._model.quaternion.slerp(helper.quaternion, Math.min(1, delta * 14));
+      // Slerp rápido (factor 22) → la rotación alcanza el target en 2-3
+      // frames; así cuando pulsas atacar tras cambiar de dirección, el
+      // cono frontal ya está alineado.
+      this._model.quaternion.slerp(helper.quaternion, Math.min(1, delta * 22));
     }
 
     if (moving && this.state === PlayerState.IDLE) {
@@ -839,17 +858,36 @@ export class Player {
     }
     if (!this._upgradeMenuOpen) return;
 
-    // Navegación: ay del eje vertical, con cooldown anti-spam
+    // Navegación: detectar flanco (cuando el eje cruza el umbral) para que
+    // mantener W o el stick no haga scroll continuo. Permitimos repetición
+    // si el usuario sostiene la dirección > 0.35s.
     this._menuNavCooldown -= delta;
     const ay = this._input.GetAxisY?.() ?? 0;
+    const upPressed   = ay < -0.4;
+    const downPressed = ay >  0.4;
+    const wasUp   = this._menuPrevUp;
+    const wasDown = this._menuPrevDown;
+
+    const justUp   = upPressed && !wasUp;
+    const justDown = downPressed && !wasDown;
+
     if (this._menuNavCooldown <= 0) {
-      if (ay < -0.4) {
+      if (justUp || (upPressed && this._menuHoldTimer > 0.35)) {
         this._menuSelection -= 1;
-        this._menuNavCooldown = 0.18;
-      } else if (ay > 0.4) {
+        this._menuNavCooldown = 0.16;
+      } else if (justDown || (downPressed && this._menuHoldTimer > 0.35)) {
         this._menuSelection += 1;
-        this._menuNavCooldown = 0.18;
+        this._menuNavCooldown = 0.16;
       }
+    }
+
+    // Trackers para edge / hold
+    this._menuPrevUp   = upPressed;
+    this._menuPrevDown = downPressed;
+    if (upPressed || downPressed) {
+      this._menuHoldTimer = (this._menuHoldTimer || 0) + delta;
+    } else {
+      this._menuHoldTimer = 0;
     }
 
     // Confirmar compra con ataque (J o A)

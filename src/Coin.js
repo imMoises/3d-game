@@ -15,11 +15,17 @@ export class Coin {
     this.value  = value;
     this.collected = false;
 
-    const geom = new THREE.CylinderGeometry(0.4, 0.4, 0.12, 18);
+    // Las monedas más valiosas son visualmente más grandes y brillantes
+    // para que el jugador identifique el "loot" jugoso de un vistazo.
+    //   value 1 → radio 0.4 ; value 5+ → radio 0.7 (clamp).
+    const radius   = Math.min(0.7, 0.35 + value * 0.06);
+    const emissive = Math.min(1.0, 0.30 + value * 0.06);
+
+    const geom = new THREE.CylinderGeometry(radius, radius, 0.14, 18);
     const mat  = new THREE.MeshStandardMaterial({
       color:     0xffd23f,
       emissive:  0xffaa00,
-      emissiveIntensity: 0.35,
+      emissiveIntensity: emissive,
       roughness: 0.3,
       metalness: 0.8,
     });
